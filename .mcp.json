@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "shop": {
+      "type": "http",
+      "url": "http://127.0.0.1:${SHOP_MCP_HOST_PORT:-8000}/mcp"
+    }
+  }
+}

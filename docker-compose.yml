@@ -1,0 +1,45 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: shop
+      # Owner/superuser: used only by the init scripts, never by the MCP server.
+      POSTGRES_USER: shop_owner
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shop_owner_pw}
+      # Password for the read-only role created in db/init/03_readonly_role.sh.
+      MCP_READONLY_PASSWORD: ${MCP_READONLY_PASSWORD:-mcp_readonly_pw}
+    ports:
+      # Bound to localhost only; the host port is configurable.
+      - "127.0.0.1:${SHOP_DB_HOST_PORT:-55432}:5432"
+    volumes:
+      # Scripts here run once, in name order, when the data volume is empty.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shop_owner -d shop"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mcp:
+    build: .
+    environment:
+      # The server only ever gets the read-only role's credentials.
+      SHOP_MCP_DATABASE_URL: postgresql://mcp_readonly:${MCP_READONLY_PASSWORD:-mcp_readonly_pw}@db:5432/shop
+      SHOP_MCP_MAX_ROWS: ${SHOP_MCP_MAX_ROWS:-200}
+      SHOP_MCP_STATEMENT_TIMEOUT_MS: ${SHOP_MCP_STATEMENT_TIMEOUT_MS:-5000}
+      SHOP_MCP_LOG_LEVEL: ${SHOP_MCP_LOG_LEVEL:-INFO}
+    ports:
+      # Streamable HTTP endpoint at http://127.0.0.1:8000/mcp
+      - "127.0.0.1:${SHOP_MCP_HOST_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    # The server needs no disk writes and no Linux capabilities.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+
+volumes:
+  pgdata:

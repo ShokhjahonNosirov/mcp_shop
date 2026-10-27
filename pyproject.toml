@@ -1,0 +1,32 @@
+[project]
+name = "shop-mcp"
+version = "0.1.0"
+description = "Read-only MCP server exposing a demo e-commerce PostgreSQL database to AI agents"
+readme = "README.md"
+authors = [
+    { name = "Shokhjahon Nosirov", email = "shokhjahonnosirov@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "mcp>=2,<3",
+    "psycopg-pool>=3.2",
+    "psycopg[binary]>=3.2",
+    "pydantic-settings>=2.16.1",
+    "sqlglot>=30.25.0",
+]
+
+[project.scripts]
+shop-mcp = "shop_mcp.server:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "anyio>=4.15.1",
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

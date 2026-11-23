@@ -1,0 +1,115 @@
+# Runs the agent evals against a freshly seeded database. Every case is a
+# real, billed Claude API call, so this only runs when started by hand
+# (Actions tab -> Evals -> Run workflow), never on push.
+#
+# Needs the repository secret ANTHROPIC_API_KEY.
+name: Evals
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Claude model
+        default: claude-opus-5-5
+      effort:
+        description: Effort level
+        type: choice
+        options: [low, medium, high, xhigh, max]
+        default: medium
+      only:
+        description: Comma-separated case ids (empty = all cases)
+        required: false
+      min_pass_rate:
+        description: Fail the run below this pass rate (0-1)
+        default: "0"
+
+permissions:
+  contents: read
+
+# Never two paid runs at once.
+concurrency:
+  group: evals
+  cancel-in-progress: false
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      # Same setup as ci.yml and the db service in docker-compose.yml. A fresh
+      # database each run, so relative-date questions always have recent data.
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: shop
+          POSTGRES_USER: shop_owner
+          POSTGRES_PASSWORD: shop_owner_pw
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U shop_owner -d shop"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Seed the database (schema, seed data, read-only role)
+        run: sh db/apply-init-scripts.sh
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "55432"
+          PGPASSWORD: shop_owner_pw
+          POSTGRES_USER: shop_owner
+          POSTGRES_DB: shop
+          MCP_READONLY_PASSWORD: mcp_readonly_pw
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.5"
+          enable-cache: true
+
+      - run: uv sync --locked
+
+      - name: Run evals
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # The agent starts the MCP server over stdio; both use the read-only role.
+          SHOP_MCP_DATABASE_URL: postgresql://mcp_readonly:mcp_readonly_pw@127.0.0.1:55432/shop
+          SHOP_AGENT_TRANSPORT: stdio
+          # Inputs are passed as environment variables, not pasted into the
+          # script, so a crafted input cannot inject shell commands.
+          MODEL: ${{ inputs.model }}
+          EFFORT: ${{ inputs.effort }}
+          ONLY: ${{ inputs.only }}
+          MIN_PASS_RATE: ${{ inputs.min_pass_rate }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::error::Add the ANTHROPIC_API_KEY repository secret (Settings -> Secrets and variables -> Actions)."
+            exit 1
+          fi
+          set -o pipefail
+          uv run shop-evals \
+            --model "$MODEL" --effort "$EFFORT" \
+            ${ONLY:+--only "$ONLY"} \
+            --min-pass-rate "$MIN_PASS_RATE" \
+            --output evals/reports/report.json | tee evals-output.txt
+
+      - name: Add the results table to the run summary
+        if: always()
+        run: |
+          if [ -f evals-output.txt ]; then
+            { echo '## Eval results'; echo '```'; cat evals-output.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report-${{ github.run_number }}
+          # report.json and the agent's JSONL event log next to it.
+          path: evals/reports/
+          if-no-files-found: warn
+          retention-days: 30

@@ -30,7 +30,12 @@ def database_available() -> None:
     try:
         psycopg.connect(TEST_DATABASE_URL, connect_timeout=3).close()
     except psycopg.OperationalError as exc:
-        pytest.skip(f"test database not reachable ({exc.__class__.__name__}); run `docker compose up -d db`")
+        message = f"test database not reachable ({exc.__class__.__name__}); run `docker compose up -d db`"
+        # CI sets this: there a missing database is a broken setup, and
+        # skipping would turn most of the suite green without running it.
+        if os.environ.get("SHOP_MCP_REQUIRE_TEST_DB"):
+            pytest.fail(message)
+        pytest.skip(message)
 
 
 @pytest.fixture
